@@ -1,0 +1,125 @@
+// Databricks notebook source
+// MAGIC %md
+// MAGIC # EventHub Structured Streaming
+
+// COMMAND ----------
+
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.streaming.ProcessingTime
+import org.apache.spark.eventhubs._
+
+// COMMAND ----------
+
+import org.apache.spark.eventhubs.{ ConnectionStringBuilder, EventHubsConf, EventPosition }
+import org.apache.spark.sql.functions.{ explode, split }
+val connectionString = ConnectionStringBuilder()
+  .setNamespaceName("srramstreaming")
+  .setEventHubName("realtimestreaming")
+  .setSasKeyName("admin")
+  .setSasKey("HrWjvLRFLegTiVxIZYOVOh50rhziyRRJ07t6GIjrCyw=")
+  .build
+val eventHubsConf = EventHubsConf(connectionString)
+                    .setStartingPosition(EventPosition.fromEndOfStream)
+//val sparkSession = spark.builder().getOrCreate()
+val streamingInputDF = spark.readStream  
+  .options(eventHubsConf.toMap)
+  .format("org.apache.spark.sql.eventhubs.EventHubsSourceProvider")
+  .load()
+
+// COMMAND ----------
+
+import org.apache.spark.sql.functions._
+val telemetryDF = streamingInputDF.select($"body".cast("string").as("value"), $"enqueuedTime".as("timestamp") )
+val jsonTelemetry = telemetryDF.select( from_json($"value", telemetrySchema).as("json"), $"timestamp")
+
+// COMMAND ----------
+
+display(telemetryDF)
+
+// COMMAND ----------
+
+val streamingQuery1 = streamingInputDF.writeStream.
+       outputMode("append").
+       option("checkpointLocation", "/tmp/test4").
+      format("parquet").option("path", "/tmp/telemetryOutput6").start()
+
+// COMMAND ----------
+
+streamingQuery1.stop()
+
+// COMMAND ----------
+
+val Sample = spark.read.parquet("/tmp/telemetryOutput6").selectExpr("CAST(body AS STRING)").take(5).map(_.getString(0))
+
+// COMMAND ----------
+
+val telemetrySchema = spark.read.json(spark.createDataset(Sample)).schema
+
+// COMMAND ----------
+
+display(jsonTelemetry)
+
+// COMMAND ----------
+
+val finalDF = jsonTelemetry.select(                         
+                        $"timestamp",
+                        $"json.action".as("action"),
+                        $"json.geo_ip.city".as("city"),
+                        $"json.geo_ip.country_name".as("country"),
+                        $"json.page_title".as("page"),
+                        $"json.url".as("pageurl"),
+                        $"json.user".as("ipaddress"),
+                        $"json.geo_ip.region_name".as("region"),
+                        $"json.geo_ip.latitude".as("latitude"),
+                        $"json.geo_ip.longitude".as("longitude")
+
+)
+                        //$"json.getItem("geo_ip").getItem("country_name") 'Country)
+
+// COMMAND ----------
+
+display(finalDF)
+
+// COMMAND ----------
+
+// display(finalDF.groupBy($"provider", window($"timestamp", "1 hour")).count())
+//val current_timestamp = lit(System.currentTimeMillis())
+//display(finalDF.withColumn("timestamp2", unix_timestamp($"timestamp", "MM/dd/yyyy HH:mm:ss")).filter(((current_timestamp) - $"timestamp2")/60 < 10).groupBy($"provider").count())
+display(finalDF.groupBy($"country").count())
+
+
+// COMMAND ----------
+
+// MAGIC %md
+// MAGIC 
+// MAGIC ## Filtering the data
+// MAGIC 
+// MAGIC Using our structured stream, let's focus specifically on Edits and select whether the user making the edit is a Bot or not.
+
+// COMMAND ----------
+//Filter & Windowing 
+val usadata = jsonTelemetry.filter($"json.geo_ip.country_name" === "United States")
+                        .select($"timestamp",
+                        $"json.action".as("action"),
+                        $"json.geo_ip.city".as("city"),
+                        $"json.geo_ip.country_name".as("country"),
+                        $"json.page_title".as("page"),
+                        $"json.url".as("pageurl"),
+                        $"json.user".as("ipaddress"),
+                        $"json.geo_ip.region_name".as("region"),
+                        $"json.geo_ip.latitude".as("latitude"),
+                        $"json.geo_ip.longitude".as("longitude"),
+                        $"json.is_bot".as("isBot")
+                        )
+
+// COMMAND ----------
+
+display(
+  usadata
+    .groupBy( window($"timestamp", "600 seconds", "30 seconds"), 
+              $"city", $"isBot")
+    .count()
+    .orderBy($"count".desc)
+    .select($"city", $"count", $"isBot")
+)
