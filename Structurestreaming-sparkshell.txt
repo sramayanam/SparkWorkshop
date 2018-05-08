@@ -1,0 +1,8 @@
+spark-shell --packages "com.microsoft.azure:azure-eventhubs-spark_2.11:2.2.0" 
+import org.apache.spark.eventhubs.{ ConnectionStringBuilder, EventHubsConf, EventPosition }
+val connectionString = ConnectionStringBuilder().setNamespaceName("srramstreaming").setEventHubName("realtimestreaming").setSasKeyName("admin").setSasKey("HrWjvLRFLegTiVxIZYOVOh50rhziyRRJ07t6GIjrCyw=").build
+val eventHubsConf = EventHubsConf(connectionString).setStartingPosition(EventPosition.fromOffset("245840"))
+val streamingInputDF = spark.readStream.options(eventHubsConf.toMap).format("org.apache.spark.sql.eventhubs.EventHubsSourceProvider").load()
+val streamingQuery1 = streamingInputDF.writeStream.outputMode("append").option("checkpointLocation", "wasbs://checkpoint@srramobstorage.blob.core.windows.net/checkpoint1").format("parquet").option("path","wasbs://data@srramobstorage.blob.core.windows.net/telemetryOutput1").start()
+
+
